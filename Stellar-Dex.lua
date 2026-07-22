@@ -2,7 +2,7 @@
 	Stellar Dex
 	Version 2.1
 	
-	Developed by Chillz
+	Developed by rizz_rxs
 	
 	Stellar Dex is a revival of Moon's Dex, made to fulfill Moon's Dex prophecy.
 ]]
