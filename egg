@@ -1,6 +1,6 @@
--- yslemEgg | Instant TP + Chase & Steal + Clean UI
+-- yslemEgg | Instant TP + Chase & Steal + Clean UI + Bat Attack
 -- Pick a pet, press Steal.
--- If someone takes it first → chase + attack + steal back → Instant TP home.
+-- If someone takes it first → chase + ใช้ไม้ตี + steal back → Instant TP home.
 -- UI only shows real existing eggs (no ghosts / no duplicates).
 
 local Players = game:GetService("Players")
@@ -730,7 +730,7 @@ local function groundY(position, fallback)
 	return y
 end
 
------------------------------------------------------------------- Chase & Steal from Player
+------------------------------------------------------------------ Chase & Steal + Bat Attack
 local function findCarrier(uid)
 	if type(uid) ~= "string" then return nil end
 	for _, plr in ipairs(Players:GetPlayers()) do
@@ -755,26 +755,64 @@ end
 
 local function attackTarget(targetPlayer)
 	local char = localPlayer.Character
-	local humanoid = char and char:FindFirstChildOfClass("Humanoid")
-	if not humanoid or not targetPlayer.Character then return end
+	if not char or not targetPlayer.Character then return end
 
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	local targetRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+	local myRoot = root()
+	if not humanoid or not targetRoot or not myRoot then return end
+
+	-- หา tool (ไม้) จากตัวก่อน แล้วค่อยไปหาใน Backpack
 	local tool = char:FindFirstChildWhichIsA("Tool")
+	if not tool then
+		local backpack = localPlayer:FindFirstChild("Backpack")
+		if backpack then
+			for _, t in ipairs(backpack:GetChildren()) do
+				if t:IsA("Tool") then
+					tool = t
+					break
+				end
+			end
+		end
+	end
+
 	if tool then
 		pcall(function()
 			humanoid:EquipTool(tool)
 		end)
-	end
 
-	local attackRemote = remote("RE/Combat/Attack") or remote("RE/Melee/Swing") or remote("RE/Tool/Activate") or remote("RE/Combat/Hit")
-	if attackRemote then
-		pcall(function()
-			attackRemote:FireServer(targetPlayer.Character)
+		-- หันหน้าเข้าหาเป้า
+		local look = (targetRoot.Position - myRoot.Position)
+		look = Vector3.new(look.X, 0, look.Z)
+		if look.Magnitude > 0.1 then
+			pcall(function()
+				myRoot.CFrame = CFrame.lookAt(myRoot.Position, myRoot.Position + look)
+			end)
+		end
+
+		-- ตีซ้ำ
+		task.spawn(function()
+			for i = 1, 4 do
+				if not tool.Parent or state.Cancel then break end
+				pcall(function()
+					tool:Activate()
+				end)
+				local handle = tool:FindFirstChild("Handle")
+				if handle then
+					local rem = tool:FindFirstChildWhichIsA("RemoteEvent") or tool:FindFirstChildWhichIsA("RemoteFunction")
+					if rem and rem:IsA("RemoteEvent") then
+						pcall(function()
+							rem:FireServer()
+						end)
+					end
+				end
+				task.wait(0.12)
+			end
 		end)
-	end
-
-	if tool then
+	else
+		-- ไม่มีไม้ → พุ่งชน
 		pcall(function()
-			tool:Activate()
+			myRoot.AssemblyLinearVelocity = (targetRoot.Position - myRoot.Position).Unit * 40
 		end)
 	end
 end
