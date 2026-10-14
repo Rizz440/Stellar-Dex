@@ -1,6 +1,7 @@
--- yslemEgg | Instant TP + Chase & Steal
--- Pick a pet (icon + value), press Steal: taken and delivered with the Instant TP logic only.
--- If someone takes the egg first → chase them, attack, steal back, then Instant TP home.
+-- yslemEgg | Instant TP + Chase & Steal + Clean UI
+-- Pick a pet, press Steal.
+-- If someone takes it first → chase + attack + steal back → Instant TP home.
+-- UI only shows real existing eggs (no ghosts / no duplicates).
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -347,18 +348,40 @@ task.spawn(function()
 	end
 end)
 
+------------------------------------------------------------------ snapshot (fixed: no ghosts / no duplicates)
 local function snapshot()
 	local list = {}
+	local seen = {}
+
 	local ok, result = pcall(function()
 		return remote("RF/EggWorld/AskFieldEggSnapshot"):InvokeServer()
 	end)
+
 	local records = ok and type(result) == "table" and result.Records or nil
-	if type(records) ~= "table" then return list end
+	if type(records) ~= "table" then
+		return list
+	end
+
 	for _, record in pairs(records) do
-		if type(record) == "table" and type(record.Uid) == "string" and (record.State == "Slot" or record.State == "Dropped") and typeof(record.BottomCFrame) == "CFrame" then
-			list[#list + 1] = record
+		if type(record) == "table"
+			and type(record.Uid) == "string"
+			and not seen[record.Uid]
+			and (record.State == "Slot" or record.State == "Dropped")
+			and typeof(record.BottomCFrame) == "CFrame"
+		then
+			local exists = workspace:FindFirstChild(record.Uid)
+			if not exists then
+				local slots = workspace:FindFirstChild("AreaEggSlotsClient")
+				exists = slots and slots:FindFirstChild(record.Uid)
+			end
+
+			if exists then
+				seen[record.Uid] = true
+				list[#list + 1] = record
+			end
 		end
 	end
+
 	return list
 end
 
@@ -742,7 +765,6 @@ local function attackTarget(targetPlayer)
 		end)
 	end
 
-	-- ลอง remote โจมตีทั่วไป (ปรับชื่อตามเกมได้)
 	local attackRemote = remote("RE/Combat/Attack") or remote("RE/Melee/Swing") or remote("RE/Tool/Activate") or remote("RE/Combat/Hit")
 	if attackRemote then
 		pcall(function()
@@ -769,7 +791,6 @@ local function chaseAndSteal(uid, timeout)
 		local carrier = findCarrier(uid)
 
 		if not carrier or not carrier.Character then
-			-- ไข่หลุดจากมือแล้ว → ลอง grab
 			if grab(uid, 2.5) then
 				return true
 			end
@@ -859,7 +880,6 @@ local function runToEgg(uid, egg)
 
 		local currentEggPos = eggNow(uid, cache)
 		if not currentEggPos then
-			-- ไข่หายจากสนาม = มีคนเก็บไปแล้ว
 			status("Egg taken by someone, switching to chase")
 			return chaseAndSteal(uid, 30)
 		end
@@ -1474,9 +1494,15 @@ local function rebuild()
 	end
 
 	local infos = {}
+	local seenUid = {}
+
 	for _, record in ipairs(snapshot()) do
-		infos[#infos + 1] = describe(record)
+		if not seenUid[record.Uid] then
+			seenUid[record.Uid] = true
+			infos[#infos + 1] = describe(record)
+		end
 	end
+
 	table.sort(infos, function(a, b)
 		return a.Value > b.Value
 	end)
@@ -1484,6 +1510,7 @@ local function rebuild()
 	local still = false
 	for index, info in ipairs(infos) do
 		still = still or info.Uid == selectedUid
+
 		local frame = make("TextButton", {
 			Size = UDim2.new(1, 0, 0, 28),
 			BackgroundColor3 = BG,
@@ -1493,6 +1520,7 @@ local function rebuild()
 		})
 		frame.Parent = list
 		corner(frame, 10)
+
 		local rowStroke, rowGradient = livingStroke(frame, 1, false)
 
 		make("ImageLabel", {
@@ -1523,14 +1551,23 @@ local function rebuild()
 			Text = money(info.Value),
 		})
 
-		rows[info.Uid] = { Frame = frame, Stroke = rowStroke, Gradient = rowGradient }
+		rows[info.Uid] = {
+			Frame = frame,
+			Stroke = rowStroke,
+			Gradient = rowGradient
+		}
+
 		frame.MouseButton1Click:Connect(function()
 			setSelected(info.Uid)
 			status("Selected: " .. info.Name)
 		end)
 	end
 
-	setSelected(still and selectedUid or nil)
+	if not still then
+		selectedUid = nil
+	end
+	setSelected(selectedUid)
+
 	if #infos == 0 then
 		status("Pick a pet")
 	end
