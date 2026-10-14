@@ -1,7 +1,4 @@
--- yslemEgg | Instant TP + Chase & Steal + Clean UI + Bat Attack
--- Pick a pet, press Steal.
--- If someone takes it first → chase + ใช้ไม้ตี + steal back → Instant TP home.
--- UI only shows real existing eggs (no ghosts / no duplicates).
+-- yslemEgg | Instant TP + Chase & Steal + Clean UI + Bat Attack + Face Direction
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -10,7 +7,6 @@ local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local localPlayer = Players.LocalPlayer
 
------------------------------------------------------------------- settings
 local CFG = {
 	SpeedCap = 1.15,
 	HopRatio = 1.515,
@@ -32,7 +28,6 @@ local CFG = {
 }
 local FPS = { 60, 30, 0.15 }
 
------------------------------------------------------------------- game handles
 local function safeRequire(getter)
 	local ok, result = pcall(function()
 		return require(getter())
@@ -54,7 +49,6 @@ local function root()
 	return character and character:FindFirstChild("HumanoidRootPart")
 end
 
------------------------------------------------------------------- Humanoid Shield
 local shield = { Original = nil, Clone = nil, Links = {}, Connection = nil, Added = nil }
 
 local function walkSpeed()
@@ -238,7 +232,6 @@ local function shieldStop()
 	shieldUndo()
 end
 
------------------------------------------------------------------- carry / delivery state
 local state = {
 	Carrying = false,
 	Uid = nil,
@@ -348,7 +341,6 @@ task.spawn(function()
 	end
 end)
 
------------------------------------------------------------------- snapshot (fixed: no ghosts / no duplicates)
 local function snapshot()
 	local list = {}
 	local seen = {}
@@ -394,7 +386,6 @@ local function eggPosition(uid)
 	return nil
 end
 
------------------------------------------------------------------- egg info
 local function describe(record)
 	local directory = type(Assets) == "table" and Assets.Directory or nil
 	local entry = type(directory) == "table" and directory[tostring(record.AssetCategory)] or nil
@@ -433,7 +424,6 @@ local function money(value)
 	return string.format("$%d/s", math.floor(value + 0.5))
 end
 
------------------------------------------------------------------- Instant TP helpers
 local status = function(text) end
 
 local function frozenCamera()
@@ -548,6 +538,15 @@ local function place(position)
 	end)
 end
 
+local function faceDirection(r, direction)
+	if not r or not direction then return end
+	local flat = Vector3.new(direction.X, 0, direction.Z)
+	if flat.Magnitude < 0.1 then return end
+	pcall(function()
+		r.CFrame = CFrame.lookAt(r.Position, r.Position + flat.Unit)
+	end)
+end
+
 local dangerCache, dangerAt = {}, 0
 local function dangers()
 	if os.clock() - dangerAt < 1 then return dangerCache end
@@ -634,7 +633,6 @@ local function avoid(from, to)
 	return to
 end
 
------------------------------------------------------------------- egg tracking
 local function eggNow(uid, cache)
 	local node = workspace:FindFirstChild(uid)
 	local slots = workspace:FindFirstChild("AreaEggSlotsClient")
@@ -672,6 +670,7 @@ local function grab(uid, timeout)
 				if v.Magnitude > pace then
 					v = v.Unit * pace
 				end
+				faceDirection(r, delta)
 				pcall(function()
 					r.AssemblyLinearVelocity = v + Vector3.new(0, workspace.Gravity * dt * 0.5, 0)
 					r.AssemblyAngularVelocity = Vector3.zero
@@ -730,7 +729,6 @@ local function groundY(position, fallback)
 	return y
 end
 
------------------------------------------------------------------- Chase & Steal + Bat Attack
 local function findCarrier(uid)
 	if type(uid) ~= "string" then return nil end
 	for _, plr in ipairs(Players:GetPlayers()) do
@@ -762,7 +760,6 @@ local function attackTarget(targetPlayer)
 	local myRoot = root()
 	if not humanoid or not targetRoot or not myRoot then return end
 
-	-- หา tool (ไม้) จากตัวก่อน แล้วค่อยไปหาใน Backpack
 	local tool = char:FindFirstChildWhichIsA("Tool")
 	if not tool then
 		local backpack = localPlayer:FindFirstChild("Backpack")
@@ -781,7 +778,6 @@ local function attackTarget(targetPlayer)
 			humanoid:EquipTool(tool)
 		end)
 
-		-- หันหน้าเข้าหาเป้า
 		local look = (targetRoot.Position - myRoot.Position)
 		look = Vector3.new(look.X, 0, look.Z)
 		if look.Magnitude > 0.1 then
@@ -790,7 +786,6 @@ local function attackTarget(targetPlayer)
 			end)
 		end
 
-		-- ตีซ้ำ
 		task.spawn(function()
 			for i = 1, 4 do
 				if not tool.Parent or state.Cancel then break end
@@ -810,7 +805,6 @@ local function attackTarget(targetPlayer)
 			end
 		end)
 	else
-		-- ไม่มีไม้ → พุ่งชน
 		pcall(function()
 			myRoot.AssemblyLinearVelocity = (targetRoot.Position - myRoot.Position).Unit * 40
 		end)
@@ -851,6 +845,7 @@ local function chaseAndSteal(uid, timeout)
 			local speed = math.max(walkSpeed() * CFG.SpeedCap, 18)
 			local unit = flat.Unit
 			local v = unit * math.min(speed, flat.Magnitude / 0.055)
+			faceDirection(myRoot, flat)
 			pcall(function()
 				myRoot.AssemblyLinearVelocity = Vector3.new(v.X, myRoot.AssemblyLinearVelocity.Y, v.Z)
 				local humanoid = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
@@ -887,7 +882,6 @@ local function chaseAndSteal(uid, timeout)
 	return state.Carrying and state.Uid == uid
 end
 
------------------------------------------------------------------- movement
 local function runToEgg(uid, egg)
 	local lineX = lineInfo()
 	local home = homePoint()
@@ -942,6 +936,7 @@ local function runToEgg(uid, egg)
 		local speed = math.max(walkSpeed() * CFG.SpeedCap, 8)
 		local v = unit * math.min(speed, flat.Magnitude / 0.05)
 
+		faceDirection(r, flat)
 		pcall(function()
 			r.AssemblyLinearVelocity = Vector3.new(v.X, r.AssemblyLinearVelocity.Y, v.Z)
 			if humanoid and unit.Magnitude > 0 then
@@ -1044,6 +1039,7 @@ local function runHome(lineX, laneZ)
 		local horizontal = math.sqrt(math.max(speed * speed - vy * vy, 0))
 		local v = flat.Magnitude > 0.01 and flat.Unit * math.min(horizontal, flat.Magnitude / 0.05) or Vector3.zero
 
+		faceDirection(r, flat)
 		pcall(function()
 			r.AssemblyLinearVelocity = Vector3.new(v.X, vy, v.Z)
 		end)
@@ -1259,7 +1255,6 @@ local function stealAndDeliver(uid)
 	end)
 end
 
------------------------------------------------------------------- UI
 local WHITE = Color3.fromRGB(255, 255, 255)
 local SILVER = Color3.fromRGB(150, 150, 156)
 local STEEL = Color3.fromRGB(70, 70, 76)
@@ -1637,7 +1632,6 @@ task.spawn(function()
 	end
 end)
 
--- drag
 do
 	local dragging, startPos, startInput
 	header.InputBegan:Connect(function(input)
