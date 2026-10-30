@@ -1,0 +1,740 @@
+--========================================================
+-- ✈ DRONE + 💣 BOMB + FPV HUD (PC OPTIMIZED VERSION)
+--========================================================
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local SoundService = game:GetService("SoundService")
+
+local LP = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+--========================================================
+-- SETTINGS
+--========================================================
+
+local SPEED = 350
+local MIN_SPEED = 50
+local MAX_SPEED = 1500
+
+local CAMERA_DISTANCE = 25
+local CAMERA_SENSITIVITY = 0.0028 -- ปรับความไวเมาส์สำหรับ PC
+
+local THIRD_PERSON = true
+
+local droneActive = false
+local bombFlying = false
+local selectedBomb = nil
+
+-- Controls state
+local forward = false
+local backward = false
+local left = false
+local right = false
+local up = false
+local down = false
+
+local yaw = 0
+local pitch = 0
+
+local flightStart = 0
+local lastPosition = nil
+local lastUpdate = os.clock()
+local maxAltitude = 0
+
+--========================================================
+-- GUI
+--========================================================
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "DroneBombSystem"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Parent = LP:WaitForChild("PlayerGui")
+
+--========================================================
+-- ✈ TOGGLE BUTTON
+--========================================================
+
+local toggle = Instance.new("TextButton")
+toggle.Size = UDim2.fromOffset(58,58)
+toggle.Position = UDim2.fromOffset(15,15)
+toggle.BackgroundColor3 = Color3.fromRGB(18,18,22)
+toggle.Text = "✈"
+toggle.TextColor3 = Color3.new(1,1,1)
+toggle.TextSize = 27
+toggle.Font = Enum.Font.GothamBold
+toggle.AutoButtonColor = false
+toggle.Parent = gui
+
+Instance.new("UICorner",toggle).CornerRadius = UDim.new(0,16)
+
+--========================================================
+-- MENU
+--========================================================
+
+local menu = Instance.new("Frame")
+menu.Size = UDim2.fromOffset(270,410)
+menu.Position = UDim2.fromOffset(15,85)
+menu.BackgroundColor3 = Color3.fromRGB(15,15,18)
+menu.BorderSizePixel = 0
+menu.Parent = gui
+
+Instance.new("UICorner",menu).CornerRadius = UDim.new(0,18)
+
+local menuStroke = Instance.new("UIStroke")
+menuStroke.Thickness = 2
+menuStroke.Parent = menu
+
+local menuGradient = Instance.new("UIGradient")
+menuGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0,Color3.fromRGB(0,255,255)),
+	ColorSequenceKeypoint.new(.25,Color3.fromRGB(100,255,100)),
+	ColorSequenceKeypoint.new(.5,Color3.fromRGB(255,255,0)),
+	ColorSequenceKeypoint.new(.75,Color3.fromRGB(255,80,180)),
+	ColorSequenceKeypoint.new(1,Color3.fromRGB(0,180,255))
+})
+menuGradient.Parent = menuStroke
+
+--========================================================
+-- DRAG
+--========================================================
+
+local function makeDraggable(object)
+	local dragging = false
+	local dragStart
+	local startPos
+
+	object.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+
+			dragging = true
+			dragStart = input.Position
+			startPos = object.Position
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
+
+	UIS.InputChanged:Connect(function(input)
+		if not dragging then return end
+
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+
+			local delta = input.Position - dragStart
+			object.Position = UDim2.new(
+				startPos.X.Scale,
+				startPos.X.Offset + delta.X,
+				startPos.Y.Scale,
+				startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+end
+
+makeDraggable(toggle)
+makeDraggable(menu)
+
+local menuVisible = true
+
+toggle.Activated:Connect(function()
+	menuVisible = not menuVisible
+	menu.Visible = menuVisible
+end)
+
+--========================================================
+-- MENU BUTTONS
+--========================================================
+
+local function createButton(text,y)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1,-30,0,38)
+	b.Position = UDim2.fromOffset(15,y)
+	b.BackgroundColor3 = Color3.fromRGB(28,28,33)
+	b.TextColor3 = Color3.new(1,1,1)
+	b.Text = text
+	b.TextSize = 14
+	b.Font = Enum.Font.GothamBold
+	b.AutoButtonColor = false
+	b.Parent = menu
+
+	Instance.new("UICorner",b).CornerRadius = UDim.new(0,10)
+	return b
+end
+
+local bombButton = createButton("💣 เลือกระเบิด [R]", 15)
+local droneButton = createButton("🚁 โดรน: ปิด [F]", 60)
+local cameraButton = createButton("🎥 มุมมอง: 3D [V]", 105)
+local speedDown = createButton("− ลดความเร็ว [Q]", 155)
+local speedLabel = createButton("ความเร็ว: "..SPEED.." [Scroll]", 200)
+local speedUp = createButton("+ เพิ่มความเร็ว [E]", 245)
+
+local pcKeyHelp = Instance.new("TextLabel")
+pcKeyHelp.Size = UDim2.new(1, -30, 0, 90)
+pcKeyHelp.Position = UDim2.fromOffset(15, 295)
+pcKeyHelp.BackgroundTransparency = 1
+pcKeyHelp.TextColor3 = Color3.fromRGB(180, 180, 190)
+pcKeyHelp.TextSize = 11
+pcKeyHelp.Font = Enum.Font.Gotham
+pcKeyHelp.TextXAlignment = Enum.TextXAlignment.Left
+pcKeyHelp.TextYAlignment = Enum.TextYAlignment.Top
+pcKeyHelp.Text = "🎮 คีย์ลัด PC:\n• เมาส์: หันกล้อง/เลี้ยวโดรน (Auto-Lock)\n• W/A/S/D: เดินหน้า/ซ้าย/ถอย/ขวา\n• Space: ลอยตัวขึ้น | L-Ctrl: ลดระดับลง\n• R: ล็อคเป้าระเบิด | F: บินโดรน | V: สลับมุมมอง"
+pcKeyHelp.Parent = menu
+
+--========================================================
+-- FPV HUD
+--========================================================
+
+local hud = Instance.new("Frame")
+hud.Size = UDim2.fromScale(1,1)
+hud.BackgroundTransparency = 1
+hud.Visible = false
+hud.Parent = gui
+
+local function hudText(text,pos,size)
+	local t = Instance.new("TextLabel")
+	t.BackgroundTransparency = 1
+	t.Position = pos
+	t.Size = size
+	t.Text = text
+	t.TextColor3 = Color3.fromRGB(100,255,130)
+	t.TextStrokeTransparency = .55
+	t.TextSize = 15
+	t.Font = Enum.Font.Code
+	t.TextXAlignment = Enum.TextXAlignment.Left
+	t.Parent = hud
+	return t
+end
+
+-- Center Target
+local target = Instance.new("Frame")
+target.Size = UDim2.fromOffset(82,82)
+target.AnchorPoint = Vector2.new(.5,.5)
+target.Position = UDim2.fromScale(.5,.5)
+target.BackgroundColor3 = Color3.fromRGB(70,255,100)
+target.BackgroundTransparency = .88
+target.BorderColor3 = Color3.fromRGB(70,255,100)
+target.BorderSizePixel = 2
+target.Parent = hud
+
+Instance.new("UICorner",target).CornerRadius = UDim.new(0,3)
+
+local function hudLine(size,pos)
+	local line = Instance.new("Frame")
+	line.Size = size
+	line.Position = pos
+	line.BackgroundColor3 = Color3.fromRGB(90,255,120)
+	line.BorderSizePixel = 0
+	line.Parent = hud
+	return line
+end
+
+hudLine(UDim2.fromOffset(2,45), UDim2.new(.5,-1,.5,-70))
+hudLine(UDim2.fromOffset(2,45), UDim2.new(.5,-1,.5,25))
+hudLine(UDim2.fromOffset(45,2), UDim2.new(.5,-70,.5,-1))
+hudLine(UDim2.fromOffset(45,2), UDim2.new(.5,25,.5,-1))
+hudLine(UDim2.fromOffset(2,34), UDim2.new(.5,-1,.5,-108))
+hudLine(UDim2.fromOffset(34,2), UDim2.new(.5,-17,.5,-92))
+
+local rollText = hudText("[ ROLL: +00° | ACRO ]", UDim2.new(.5,-180,0,430), UDim2.fromOffset(360,30))
+rollText.TextXAlignment = Enum.TextXAlignment.Center
+
+local pitchBar = Instance.new("Frame")
+pitchBar.Size = UDim2.fromOffset(535,4)
+pitchBar.AnchorPoint = Vector2.new(.5,.5)
+pitchBar.Position = UDim2.new(.5,0,.5,95)
+pitchBar.BackgroundColor3 = Color3.fromRGB(80,255,110)
+pitchBar.BorderSizePixel = 0
+pitchBar.Parent = hud
+
+local pitchBarFill = Instance.new("Frame")
+pitchBarFill.Size = UDim2.new(.94,0,1,0)
+pitchBarFill.BackgroundColor3 = Color3.fromRGB(70,255,100)
+pitchBarFill.BorderSizePixel = 0
+pitchBarFill.Parent = pitchBar
+
+local pitchText = hudText("PITCH: +00° | CLIMB: 000 S/S", UDim2.new(.5,-190,0,545), UDim2.fromOffset(380,30))
+pitchText.TextXAlignment = Enum.TextXAlignment.Center
+
+local altText = hudText("ALT: 000 studs | AIR: 00.0s", UDim2.fromOffset(80,565), UDim2.fromOffset(390,25))
+local maxText = hudText("MAX: 0000 studs | SPS: 000 S/S", UDim2.fromOffset(80,590), UDim2.fromOffset(390,25))
+local thrText = hudText("THR: 000% | DIR: NORTH", UDim2.fromOffset(80,615), UDim2.fromOffset(390,25))
+local tempText = hudText("TEMP: 15°C | THERMAL: OFF", UDim2.fromOffset(80,640), UDim2.fromOffset(390,25))
+
+local messageText = hudText("โดรน FPV (กด F เพื่อออก)", UDim2.new(.5,-150,1,-60), UDim2.fromOffset(300,30))
+messageText.TextXAlignment = Enum.TextXAlignment.Center
+
+-- Speed Gauge
+local speedTitle = hudText("SPEED", UDim2.new(1,-125,0,60), UDim2.fromOffset(100,30))
+speedTitle.TextXAlignment = Enum.TextXAlignment.Center
+
+local speedBar = Instance.new("Frame")
+speedBar.Size = UDim2.fromOffset(42,510)
+speedBar.AnchorPoint = Vector2.new(.5,.5)
+speedBar.Position = UDim2.new(1,-100,.5,0)
+speedBar.BackgroundColor3 = Color3.fromRGB(45,45,45)
+speedBar.BackgroundTransparency = .1
+speedBar.BorderColor3 = Color3.fromRGB(110,255,120)
+speedBar.BorderSizePixel = 2
+speedBar.Parent = hud
+
+local speedFill = Instance.new("Frame")
+speedFill.AnchorPoint = Vector2.new(0,1)
+speedFill.Position = UDim2.new(0,0,1,0)
+speedFill.Size = UDim2.new(1,0,0,0)
+speedFill.BackgroundColor3 = Color3.fromRGB(70,255,90)
+speedFill.BorderSizePixel = 0
+speedFill.Parent = speedBar
+
+local compass = hudText("N     NE     E     SE     S     SW     W     NW", UDim2.new(.5,-230,1,-30), UDim2.fromOffset(460,25))
+compass.TextXAlignment = Enum.TextXAlignment.Center
+
+--========================================================
+-- DRONE SOUND & GLITCH
+--========================================================
+
+local droneSound = Instance.new("Sound")
+droneSound.Name = "DroneEngine"
+droneSound.SoundId = "rbxassetid://9118828562"
+droneSound.Looped = true
+droneSound.Volume = .5
+droneSound.Parent = SoundService
+
+local glitch = Instance.new("Frame")
+glitch.Size = UDim2.fromScale(1,1)
+glitch.Position = UDim2.fromScale(0,0)
+glitch.BackgroundColor3 = Color3.fromRGB(150,255,150)
+glitch.BackgroundTransparency = 1
+glitch.BorderSizePixel = 0
+glitch.ZIndex = 90
+glitch.Visible = false
+glitch.Parent = gui
+
+local glitchLines = {}
+for i = 1,12 do
+	local line = Instance.new("Frame")
+	line.Size = UDim2.new(1,0,0,math.random(1,3))
+	line.Position = UDim2.new(0,0,math.random(),0)
+	line.BackgroundColor3 = Color3.fromRGB(160,255,160)
+	line.BackgroundTransparency = .55
+	line.BorderSizePixel = 0
+	line.ZIndex = 91
+	line.Visible = false
+	line.Parent = glitch
+	table.insert(glitchLines,line)
+end
+
+local glitchRunning = false
+local function playDroneGlitch()
+	if glitchRunning or not droneActive then return end
+	glitchRunning = true
+	glitch.Visible = true
+
+	local start = os.clock()
+	while os.clock() - start < .32 and droneActive do
+		for _,line in ipairs(glitchLines) do
+			line.Visible = math.random() > .35
+			line.Position = UDim2.new(0, math.random(-12,12), math.random(), 0)
+			line.Size = UDim2.new(1, math.random(-80,80), 0, math.random(1,3))
+			line.BackgroundTransparency = math.random(35,75)/100
+		end
+		glitch.BackgroundTransparency = math.random(88,96)/100
+		task.wait(.025)
+	end
+
+	for _,line in ipairs(glitchLines) do line.Visible = false end
+	glitch.BackgroundTransparency = 1
+	glitch.Visible = false
+	glitchRunning = false
+end
+
+task.spawn(function()
+	while gui.Parent do
+		if droneActive then
+			task.wait(math.random(10,20)/10)
+			if droneActive then task.spawn(playDroneGlitch) end
+		else
+			task.wait(.2)
+		end
+	end
+end)
+
+--========================================================
+-- PHYSICS & TARGETING
+--========================================================
+
+local function getBombTarget()
+	local origin = Camera.CFrame.Position
+	local direction = Camera.CFrame.LookVector * 1500
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { LP.Character }
+
+	local result = workspace:Raycast(origin, direction, params)
+	if not result then return nil end
+
+	local obj = result.Instance
+	for _ = 1, 8 do
+		if not obj then break end
+		local name = string.lower(obj.Name)
+		if string.find(name,"bomb") or string.find(name,"bom") then
+			if obj:IsA("BasePart") then return obj end
+			local p = obj:FindFirstChildWhichIsA("BasePart", true)
+			if p then return p end
+		end
+		obj = obj.Parent
+	end
+	return nil
+end
+
+local attachment, velocity, orientation
+
+local function clearPhysics()
+	if velocity then velocity:Destroy(); velocity = nil end
+	if orientation then orientation:Destroy(); orientation = nil end
+	if attachment then attachment:Destroy(); attachment = nil end
+end
+
+local function setupPhysics(part)
+	clearPhysics()
+
+	attachment = Instance.new("Attachment")
+	attachment.Parent = part
+
+	velocity = Instance.new("LinearVelocity")
+	velocity.Attachment0 = attachment
+	velocity.MaxForce = math.huge
+	velocity.VectorVelocity = Vector3.zero
+	velocity.Parent = part
+
+	orientation = Instance.new("AlignOrientation")
+	orientation.Attachment0 = attachment
+	orientation.MaxTorque = math.huge
+	orientation.Responsiveness = 200
+	orientation.Parent = part
+end
+
+local function readCameraAngles()
+	local look = Camera.CFrame.LookVector
+	yaw = math.atan2(-look.X, -look.Z)
+	pitch = math.asin(math.clamp(look.Y, -1, 1))
+end
+
+local function getLookVector()
+	return CFrame.fromOrientation(pitch, yaw, 0).LookVector
+end
+
+local function updateDroneUI()
+	local active = droneActive and bombFlying and selectedBomb ~= nil and selectedBomb.Parent ~= nil
+	hud.Visible = active
+
+	if active then
+		if not droneSound.IsPlaying then droneSound:Play() end
+	else
+		if droneSound.IsPlaying then droneSound:Stop() end
+	end
+end
+
+--========================================================
+-- FLIGHT CYCLE (STOP / START)
+--========================================================
+
+local function stopDrone()
+	droneActive = false
+	bombFlying = false
+
+	forward = false
+	backward = false
+	left = false
+	right = false
+	up = false
+	down = false
+
+	clearPhysics()
+	selectedBomb = nil
+	hud.Visible = false
+
+	-- ปลดล็อคเมาส์กลับเป็นปกติบน PC
+	UIS.MouseBehavior = Enum.MouseBehavior.Default
+
+	if droneSound.IsPlaying then droneSound:Stop() end
+	glitch.Visible = false
+
+	Camera.CameraType = Enum.CameraType.Custom
+	droneButton.Text = "🚁 โดรน: ปิด [F]"
+	bombButton.Text = "💣 เลือกระเบิด [R]"
+
+	lastPosition = nil
+	flightStart = 0
+	maxAltitude = 0
+end
+
+local function startDrone()
+	if not selectedBomb then
+		selectedBomb = getBombTarget()
+		if not selectedBomb then
+			droneButton.Text = "🚁 ยังไม่ได้เลือก!"
+			task.delay(1, function()
+				if not droneActive then droneButton.Text = "🚁 โดรน: ปิด [F]" end
+			end)
+			return
+		end
+	end
+
+	readCameraAngles()
+	setupPhysics(selectedBomb)
+
+	droneActive = true
+	bombFlying = true
+
+	flightStart = os.clock()
+	lastPosition = selectedBomb.Position
+	maxAltitude = selectedBomb.Position.Y
+	lastUpdate = os.clock()
+
+	Camera.CameraType = Enum.CameraType.Scriptable
+
+	-- ล็อคเมาส์เข้ากลางจอทันทีบน PC ขยับเมาส์บังคับเลี้ยวได้เลย
+	UIS.MouseBehavior = Enum.MouseBehavior.LockCenter
+
+	droneButton.Text = "🚁 โดรน: เปิด [F]"
+	updateDroneUI()
+end
+
+local function triggerSelectBomb()
+	if droneActive then return end
+	local targetObj = getBombTarget()
+	if targetObj then
+		selectedBomb = targetObj
+		bombButton.Text = "💣 ล็อคเป้าแล้ว!"
+	else
+		selectedBomb = nil
+		bombButton.Text = "💣 หาไม่เจอ"
+	end
+	task.delay(1, function()
+		if not droneActive then
+			bombButton.Text = "💣 เลือกระเบิด [R]"
+		end
+	end)
+end
+
+bombButton.Activated:Connect(triggerSelectBomb)
+
+droneButton.Activated:Connect(function()
+	if droneActive then stopDrone() else startDrone() end
+end)
+
+cameraButton.Activated:Connect(function()
+	THIRD_PERSON = not THIRD_PERSON
+	cameraButton.Text = THIRD_PERSON and "🎥 มุมมอง: 3D [V]" or "🎥 มุมมอง: FPV [V]"
+end)
+
+local function updateSpeed()
+	speedLabel.Text = "ความเร็ว: "..SPEED.." [Scroll]"
+end
+
+speedDown.Activated:Connect(function()
+	SPEED = math.max(MIN_SPEED, SPEED - 50)
+	updateSpeed()
+end)
+
+speedUp.Activated:Connect(function()
+	SPEED = math.min(MAX_SPEED, SPEED + 50)
+	updateSpeed()
+end)
+
+--========================================================
+-- PC MOUSE CONTROLS (FPS / SIMULATOR FLIGHT)
+--========================================================
+
+UIS.InputChanged:Connect(function(input)
+	if not droneActive then return end
+
+	-- เลี้ยวโดรนตามเมาส์ขณะบิน
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Delta
+
+		yaw = yaw - (delta.X * CAMERA_SENSITIVITY)
+		pitch = math.clamp(
+			pitch - (delta.Y * CAMERA_SENSITIVITY),
+			math.rad(-85),
+			math.rad(85)
+		)
+	-- ปรับความเร็วด้วยลูกกลิ้งเมาส์ (Scroll Wheel)
+	elseif input.UserInputType == Enum.UserInputType.MouseWheel then
+		if input.Position.Z > 0 then
+			SPEED = math.min(MAX_SPEED, SPEED + 50)
+		else
+			SPEED = math.max(MIN_SPEED, SPEED - 50)
+		end
+		updateSpeed()
+	end
+end)
+
+--========================================================
+-- KEYBOARD HOTKEYS (PC DRIVING)
+--========================================================
+
+UIS.InputBegan:Connect(function(input, gp)
+	if gp then return end
+
+	-- Flight Toggle
+	if input.KeyCode == Enum.KeyCode.F then
+		if droneActive then stopDrone() else startDrone() end
+
+	-- Bomb Quick-Lock
+	elseif input.KeyCode == Enum.KeyCode.R then
+		triggerSelectBomb()
+
+	-- Camera Mode
+	elseif input.KeyCode == Enum.KeyCode.V then
+		THIRD_PERSON = not THIRD_PERSON
+		cameraButton.Text = THIRD_PERSON and "🎥 มุมมอง: 3D [V]" or "🎥 มุมมอง: FPV [V]"
+
+	-- Directionals
+	elseif input.KeyCode == Enum.KeyCode.W then
+		forward = true
+	elseif input.KeyCode == Enum.KeyCode.S then
+		backward = true
+	elseif input.KeyCode == Enum.KeyCode.A then
+		left = true
+	elseif input.KeyCode == Enum.KeyCode.D then
+		right = true
+	elseif input.KeyCode == Enum.KeyCode.Space then
+		up = true
+	elseif input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.LeftShift then
+		down = true
+
+	-- Speed Adjust
+	elseif input.KeyCode == Enum.KeyCode.Q then
+		SPEED = math.max(MIN_SPEED, SPEED - 50)
+		updateSpeed()
+	elseif input.KeyCode == Enum.KeyCode.E then
+		SPEED = math.min(MAX_SPEED, SPEED + 50)
+		updateSpeed()
+
+	-- Menu Toggle
+	elseif input.KeyCode == Enum.KeyCode.M then
+		menuVisible = not menuVisible
+		menu.Visible = menuVisible
+	end
+end)
+
+UIS.InputEnded:Connect(function(input)
+	if input.KeyCode == Enum.KeyCode.W then forward = false
+	elseif input.KeyCode == Enum.KeyCode.S then backward = false
+	elseif input.KeyCode == Enum.KeyCode.A then left = false
+	elseif input.KeyCode == Enum.KeyCode.D then right = false
+	elseif input.KeyCode == Enum.KeyCode.Space then up = false
+	elseif input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.LeftShift then down = false
+	end
+end)
+
+--========================================================
+-- MAIN FLIGHT LOOP
+--========================================================
+
+RunService.RenderStepped:Connect(function()
+	if not droneActive or not bombFlying or not selectedBomb then
+		hud.Visible = false
+		return
+	end
+
+	if not selectedBomb.Parent then
+		stopDrone()
+		return
+	end
+
+	-- บังคับล็อคเมาส์ตลอดเวลาขณะกำลังบิน
+	if UIS.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
+		UIS.MouseBehavior = Enum.MouseBehavior.LockCenter
+	end
+
+	updateDroneUI()
+
+	local look = getLookVector()
+	local cameraCF = CFrame.lookAt(Vector3.zero, look)
+	local cameraRight = cameraCF.RightVector
+	local cameraUp = Vector3.new(0, 1, 0)
+
+	local direction = Vector3.zero
+
+	if forward then direction += look end
+	if backward then direction -= look end
+	if left then direction -= cameraRight end
+	if right then direction += cameraRight end
+	if up then direction += cameraUp end
+	if down then direction -= cameraUp end
+
+	if direction.Magnitude > 0 then
+		direction = direction.Unit
+	end
+
+	if velocity then
+		velocity.VectorVelocity = direction * SPEED
+	end
+
+	if orientation and direction.Magnitude > 0 then
+		orientation.CFrame = CFrame.lookAt(Vector3.zero, direction)
+	end
+
+	Camera.CameraType = Enum.CameraType.Scriptable
+
+	if THIRD_PERSON then
+		local cameraPosition = selectedBomb.Position - (look * CAMERA_DISTANCE) + Vector3.new(0,6,0)
+		Camera.CFrame = CFrame.lookAt(cameraPosition, cameraPosition + look)
+	else
+		Camera.CFrame = CFrame.lookAt(selectedBomb.Position, selectedBomb.Position + look)
+	end
+
+	local now = os.clock()
+	local dt = math.max(now - lastUpdate, 0.001)
+	local position = selectedBomb.Position
+	local altitude = position.Y
+	maxAltitude = math.max(maxAltitude, altitude)
+
+	local currentSpeed = 0
+	if lastPosition then
+		currentSpeed = (position - lastPosition).Magnitude / dt
+	end
+
+	lastPosition = position
+	lastUpdate = now
+
+	local airTime = now - flightStart
+	local heading = math.deg(math.atan2(-look.X, -look.Z))
+	if heading < 0 then heading += 360 end
+
+	local pitchDegrees = math.deg(pitch)
+	local climb = look.Y * SPEED
+	local throttle = math.clamp(direction.Magnitude, 0, 1) * 100
+
+	pitchText.Text = string.format("PITCH: %+03d° | CLIMB: %03d S/S", math.floor(pitchDegrees), math.floor(climb))
+	altText.Text = string.format("ALT: %04d studs | AIR: %.1fs", math.floor(altitude), airTime)
+	maxText.Text = string.format("MAX: %04d studs | SPS: %03d S/S", math.floor(maxAltitude), math.floor(currentSpeed))
+	thrText.Text = string.format("THR: %03d%% | DIR: %03d°", math.floor(throttle), math.floor(heading))
+
+	local pitchPercent = math.clamp((pitchDegrees + 85) / 170, 0, 1)
+	pitchBarFill.Size = UDim2.new(pitchPercent, 0, 1, 0)
+
+	local speedPercent = math.clamp(SPEED / MAX_SPEED, 0, 1)
+	speedFill.Size = UDim2.new(1, 0, speedPercent, 0)
+end)
+
+--========================================================
+-- RESPAWN
+--========================================================
+
+LP.CharacterAdded:Connect(function()
+	stopDrone()
+	task.wait(.5)
+	Camera.CameraType = Enum.CameraType.Custom
+end)
